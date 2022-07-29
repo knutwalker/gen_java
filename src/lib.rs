@@ -36,6 +36,7 @@ pub struct ClassDef {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Member {
     Def(Def),
     Class(ClassDef),
@@ -79,11 +80,13 @@ pub struct Arg {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Stmt {
     Def(Def),
     Assign {
         lhs: Expr,
         rhs: Expr,
+        op: Option<BinOp>,
     },
     Return {
         value: Expr,
@@ -97,6 +100,7 @@ pub enum Stmt {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Expr {
     NoOp,
     Literal(u32),
@@ -115,17 +119,17 @@ pub enum Expr {
     MethodRef(Call),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum BinOp {
+    Index,
     Add,
     Sub,
     Shl,
     Shr,
+    Lte,
     And,
     Or,
-    OrAssign,
-    Index,
-    Lte,
 }
 
 impl Def {
@@ -212,32 +216,110 @@ impl Expr {
             Expr::Binary { op, lhs, rhs } => {
                 lhs.optimize();
                 rhs.optimize();
+
                 match op {
-                    BinOp::Add => {
-                        if let Expr::Literal(0) = &**lhs {
+                    BinOp::Add => match (&mut **lhs, &mut **rhs) {
+                        (Expr::Literal(lhs), Expr::Literal(rhs)) => {
+                            *self = Expr::Literal(lhs.wrapping_add(*rhs));
+                            return;
+                        }
+                        (Expr::Literal(0), rhs) => {
                             let rhs = rhs.take();
                             *self = rhs;
-                        } else if let Expr::Literal(0) = &**rhs {
+                            return;
+                        }
+                        (lhs, Expr::Literal(0)) => {
                             let lhs = lhs.take();
                             *self = lhs;
+                            return;
                         }
-                    }
-                    BinOp::Sub | BinOp::Shl | BinOp::Shr => {
-                        if let Expr::Literal(0) = &**rhs {
-                            let lhs = lhs.take();
-                            *self = lhs
+                        _ => {}
+                    },
+                    BinOp::Sub => match (&mut **lhs, &mut **rhs) {
+                        (Expr::Literal(lhs), Expr::Literal(rhs)) => {
+                            *self = Expr::Literal(lhs.wrapping_sub(*rhs));
+                            return;
                         }
-                    }
-                    BinOp::And => {
-                        if let Expr::HexLiteral(u64::MAX) = &**rhs {
+                        (lhs, Expr::Literal(0)) => {
                             let lhs = lhs.take();
                             *self = lhs;
-                        } else if let Expr::Binary { .. } = &**lhs {
-                            let inner_lhs = lhs.take();
-                            **lhs = Expr::Group(Box::new(inner_lhs));
+                            return;
                         }
+                        _ => {}
+                    },
+                    BinOp::Shl => match (&mut **lhs, &mut **rhs) {
+                        (Expr::Literal(lhs), Expr::Literal(rhs)) => {
+                            *self = Expr::Literal(lhs.wrapping_shl(*rhs));
+                            return;
+                        }
+                        (lhs, Expr::Literal(0)) => {
+                            let lhs = lhs.take();
+                            *self = lhs;
+                            return;
+                        }
+                        (Expr::Literal(0), _) => {
+                            *self = Expr::Literal(0);
+                            return;
+                        }
+                        _ => {}
+                    },
+                    BinOp::Shr => match (&mut **lhs, &mut **rhs) {
+                        (Expr::Literal(lhs), Expr::Literal(rhs)) => {
+                            *self = Expr::Literal(lhs.wrapping_shr(*rhs));
+                            return;
+                        }
+                        (lhs, Expr::Literal(0)) => {
+                            let lhs = lhs.take();
+                            *self = lhs;
+                            return;
+                        }
+                        (Expr::Literal(0), _) => {
+                            *self = Expr::Literal(0);
+                            return;
+                        }
+                        _ => {}
+                    },
+                    BinOp::And => match (&mut **lhs, &mut **rhs) {
+                        (Expr::Literal(lhs), Expr::Literal(rhs)) => {
+                            *self = Expr::Literal(*lhs & *rhs);
+                            return;
+                        }
+                        (_, Expr::Literal(0)) | (Expr::Literal(0), _) => {
+                            *self = Expr::Literal(0);
+                            return;
+                        }
+                        (lhs, Expr::HexLiteral(u64::MAX)) => {
+                            let lhs = lhs.take();
+                            *self = lhs;
+                            return;
+                        }
+                        _ => {}
+                    },
+                    BinOp::Or => match (&mut **lhs, &mut **rhs) {
+                        (Expr::Literal(lhs), Expr::Literal(rhs)) => {
+                            *self = Expr::Literal(*lhs | *rhs);
+                            return;
+                        }
+                        (other, Expr::Literal(0)) | (Expr::Literal(0), other) => {
+                            let other = other.take();
+                            *self = other;
+                            return;
+                        }
+                        _ => {}
+                    },
+                    BinOp::Index | BinOp::Lte => {}
+                }
+                if let Expr::Binary { op: lhs_op, .. } = &**lhs {
+                    if lhs_op > op {
+                        let inner_lhs = lhs.take();
+                        *lhs = Box::new(Expr::Group(Box::new(inner_lhs)));
                     }
-                    BinOp::Or | BinOp::OrAssign | BinOp::Index | BinOp::Lte => {}
+                }
+                if let Expr::Binary { op: rhs_op, .. } = &**rhs {
+                    if rhs_op > op && *op != BinOp::Index {
+                        let inner_rhs = rhs.take();
+                        *rhs = Box::new(Expr::Group(Box::new(inner_rhs)));
+                    }
                 }
             }
             Expr::Call(call) => {
@@ -261,12 +343,40 @@ impl Expr {
 }
 
 impl Stmt {
+    pub fn assign(lhs: Expr, rhs: Expr) -> Self {
+        Self::assign_op(lhs, rhs, None)
+    }
+
+    pub fn add_assign(lhs: Expr, rhs: Expr) -> Self {
+        Self::assign_op(lhs, rhs, BinOp::Add)
+    }
+
+    pub fn sub_assign(lhs: Expr, rhs: Expr) -> Self {
+        Self::assign_op(lhs, rhs, BinOp::Sub)
+    }
+
+    pub fn and_assign(lhs: Expr, rhs: Expr) -> Self {
+        Self::assign_op(lhs, rhs, BinOp::And)
+    }
+
+    pub fn or_assign(lhs: Expr, rhs: Expr) -> Self {
+        Self::assign_op(lhs, rhs, BinOp::Or)
+    }
+
+    pub fn assign_op(lhs: Expr, rhs: Expr, op: impl Into<Option<BinOp>>) -> Self {
+        Self::Assign {
+            lhs,
+            rhs,
+            op: op.into(),
+        }
+    }
+
     pub fn optimize(&mut self) {
         match self {
             Stmt::Def(def) => {
                 def.optimize();
             }
-            Stmt::Assign { lhs, rhs } => {
+            Stmt::Assign { lhs, rhs, op: _ } => {
                 lhs.optimize();
                 rhs.optimize();
             }
@@ -444,7 +554,13 @@ impl fmt::Display for Stmt {
                 ident,
                 value: _,
             }) => write!(f, "{typ} {ident};"),
-            Self::Assign { lhs, rhs } => write!(f, "{lhs} = {rhs};"),
+            Self::Assign { lhs, rhs, op } => {
+                let sigil = op
+                    .as_ref()
+                    .and_then(|op| op.sigil().between())
+                    .unwrap_or_default();
+                write!(f, "{lhs} {sigil}= {rhs};")
+            }
             Self::Return { value } => write!(f, "return {value};"),
             Self::Assert { assertion, message } => {
                 write!(f, "assert {assertion}")?;
@@ -476,16 +592,9 @@ impl fmt::Display for Expr {
                 }
                 write!(f, "}}")
             }
-            Self::Binary { op, lhs, rhs } => match op {
-                BinOp::Add => write!(f, "{lhs} + {rhs}"),
-                BinOp::Sub => write!(f, "{lhs} - {rhs}"),
-                BinOp::Shl => write!(f, "{lhs} << {rhs}"),
-                BinOp::Shr => write!(f, "{lhs} >>> {rhs}"),
-                BinOp::And => write!(f, "{lhs} & {rhs}"),
-                BinOp::Or => write!(f, "{lhs} | {rhs}"),
-                BinOp::OrAssign => write!(f, "{lhs} |= {rhs}"),
-                BinOp::Index => write!(f, "{lhs}[{rhs}]"),
-                BinOp::Lte => write!(f, "{lhs} <= {rhs}"),
+            Self::Binary { op, lhs, rhs } => match op.sigil() {
+                Sigil::Between(sigil) => write!(f, "{lhs} {sigil} {rhs}"),
+                Sigil::Around(l, r) => write!(f, "{lhs}{l}{rhs}{r}"),
             },
             Self::Call(Call { callee, name, args }) => {
                 write!(f, "{callee}.{name}(")?;
@@ -498,6 +607,35 @@ impl fmt::Display for Expr {
                 write!(f, ")")
             }
             Self::MethodRef(call) => write!(f, "{}::{}", call.callee, call.name),
+        }
+    }
+}
+
+enum Sigil {
+    Between(&'static str),
+    Around(&'static str, &'static str),
+}
+
+impl Sigil {
+    fn between(&self) -> Option<&'static str> {
+        match self {
+            Self::Between(sigil) => Some(*sigil),
+            _ => None,
+        }
+    }
+}
+
+impl BinOp {
+    const fn sigil(&self) -> Sigil {
+        match self {
+            Self::Add => Sigil::Between("+"),
+            Self::Sub => Sigil::Between("-"),
+            Self::Shl => Sigil::Between("<<"),
+            Self::Shr => Sigil::Between(">>>"),
+            Self::And => Sigil::Between("&"),
+            Self::Or => Sigil::Between("|"),
+            Self::Lte => Sigil::Between("<="),
+            Self::Index => Sigil::Around("[", "]"),
         }
     }
 }
