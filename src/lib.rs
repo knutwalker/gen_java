@@ -97,6 +97,19 @@ pub enum Stmt {
     },
     Expr(Expr),
     Comment(String),
+    If {
+        cond: Expr,
+        then: Box<Stmt>,
+        ells: Option<Box<Stmt>>,
+    },
+    Block(Vec<Stmt>),
+    For {
+        init: Box<Stmt>,
+        cond: Box<Expr>,
+        incr: Box<Stmt>,
+        body: Box<Stmt>,
+    },
+    Break,
 }
 
 #[derive(Debug, Clone)]
@@ -125,8 +138,13 @@ pub enum BinOp {
     Index,
     Add,
     Sub,
+    Mul,
     Shl,
     Shr,
+    Eq,
+    Gt,
+    Lt,
+    Gte,
     Lte,
     And,
     Or,
@@ -247,6 +265,22 @@ impl Expr {
                         }
                         _ => {}
                     },
+                    BinOp::Mul => match (&mut **lhs, &mut **rhs) {
+                        (Expr::Literal(lhs), Expr::Literal(rhs)) => {
+                            *self = Expr::Literal(lhs.wrapping_mul(*rhs));
+                            return;
+                        }
+                        (Expr::Literal(0), _) | (_, Expr::Literal(0)) => {
+                            *self = Expr::Literal(0);
+                            return;
+                        }
+                        (Expr::Literal(1), rest) | (rest, Expr::Literal(1)) => {
+                            let rest = rest.take();
+                            *self = rest;
+                            return;
+                        }
+                        _ => {}
+                    },
                     BinOp::Shl => match (&mut **lhs, &mut **rhs) {
                         (Expr::Literal(lhs), Expr::Literal(rhs)) => {
                             *self = Expr::Literal(lhs.wrapping_shl(*rhs));
@@ -307,7 +341,7 @@ impl Expr {
                         }
                         _ => {}
                     },
-                    BinOp::Index | BinOp::Lte => {}
+                    BinOp::Index | BinOp::Eq | BinOp::Gt | BinOp::Lt | BinOp::Gte | BinOp::Lte => {}
                 }
                 if let Expr::Binary { op: lhs_op, .. } = &**lhs {
                     if lhs_op > op {
@@ -393,6 +427,28 @@ impl Stmt {
                 expr.optimize();
             }
             Stmt::Comment(_) => {}
+            Stmt::If { cond, then, ells } => {
+                cond.optimize();
+                then.optimize();
+                if let Some(e) = ells {
+                    e.optimize()
+                }
+            }
+            Stmt::Block(stmts) => {
+                stmts.iter_mut().for_each(|stmt| stmt.optimize());
+            }
+            Stmt::For {
+                init,
+                cond,
+                incr,
+                body,
+            } => {
+                init.optimize();
+                cond.optimize();
+                incr.optimize();
+                body.optimize();
+            }
+            Stmt::Break => {}
         }
     }
 }
@@ -424,11 +480,9 @@ impl MethodDef {
         match self.code {
             Some(code) => {
                 fmtln!(wrt, " {{");
-                wrt.indent();
                 for stmt in code {
                     fmtln!(wrt, "{stmt}");
                 }
-                wrt.outdent();
                 fmtln!(wrt, "{CLOSE}");
             }
             None => {
@@ -470,7 +524,6 @@ impl ClassDef {
             }
         }
         fmtln!(wrt, "{} {} {} {{", self.modifiers, self.typ, self.name);
-        wrt.indent();
 
         for member in self.members {
             wrt.nl();
@@ -481,7 +534,6 @@ impl ClassDef {
             }
         }
 
-        wrt.outdent();
         fmtln!(wrt, "{CLOSE}");
     }
 }
@@ -571,6 +623,43 @@ impl fmt::Display for Stmt {
             }
             Self::Expr(e) => write!(f, "{e};"),
             Self::Comment(comment) => write!(f, "// {}", comment),
+            Stmt::If {
+                cond,
+                then,
+                ells: Some(ells),
+            } => write!(f, "if ({cond}) {then} else {ells}"),
+            Stmt::If {
+                cond,
+                then,
+                ells: None,
+            } => write!(f, "if ({cond}) {then}"),
+            Stmt::Block(stmts) => {
+                writeln!(f, "{{")?;
+                for stmt in stmts {
+                    writeln!(f, "{stmt}")?;
+                }
+                write!(f, "}}")
+            }
+            Stmt::For {
+                init,
+                cond,
+                incr,
+                body,
+            } => {
+                let incr = if let Stmt::Block(incrs) = &**incr {
+                    incrs
+                        .iter()
+                        .map(|inc| inc.to_string())
+                        .map(|inc| inc.trim_end_matches(';').to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                } else {
+                    incr.to_string().trim_end_matches(';').to_owned()
+                };
+
+                write!(f, "for ({init} {cond}; {incr}) {body}")
+            }
+            Stmt::Break => write!(f, "break;"),
         }
     }
 }
@@ -588,7 +677,7 @@ impl fmt::Display for Expr {
             Self::ArrayInit(exprs) => {
                 writeln!(f, "{{")?;
                 for expr in exprs {
-                    writeln!(f, "    {expr},")?;
+                    writeln!(f, "{expr},")?;
                 }
                 write!(f, "}}")
             }
@@ -630,10 +719,15 @@ impl BinOp {
         match self {
             Self::Add => Sigil::Between("+"),
             Self::Sub => Sigil::Between("-"),
+            Self::Mul => Sigil::Between("*"),
             Self::Shl => Sigil::Between("<<"),
             Self::Shr => Sigil::Between(">>>"),
             Self::And => Sigil::Between("&"),
             Self::Or => Sigil::Between("|"),
+            Self::Gt => Sigil::Between(">"),
+            Self::Eq => Sigil::Between("=="),
+            Self::Lt => Sigil::Between("<"),
+            Self::Gte => Sigil::Between(">="),
             Self::Lte => Sigil::Between("<="),
             Self::Index => Sigil::Around("[", "]"),
         }
@@ -660,11 +754,11 @@ impl FileWriter {
         self.file.push('\n');
     }
 
-    pub fn indent(&mut self) {
+    fn indent(&mut self) {
         self.indent += 4;
     }
 
-    pub fn outdent(&mut self) {
+    fn outdent(&mut self) {
         self.indent -= 4;
     }
 
@@ -684,9 +778,20 @@ impl FileWriter {
         if s.is_empty() {
             return;
         }
+
+        let trim_line = s.trim();
+        if trim_line.starts_with('}') {
+            self.outdent();
+        }
+
         if self.line.is_empty() {
             self.line.push_str(&INDENT.repeat(self.indent));
         }
+
+        if trim_line.ends_with('{') {
+            self.indent();
+        }
+
         self.line.push_str(s);
     }
 
