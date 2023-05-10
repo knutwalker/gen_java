@@ -411,14 +411,25 @@ impl Stmt {
                 expr.optimize();
             }
             Stmt::Comment(_) => {}
-            Stmt::If { cond, then, ells } => {}
-            Stmt::Block(_) => {}
+            Stmt::If { cond, then, ells } => {
+                cond.optimize();
+                then.optimize();
+                ells.as_mut().map(|e| e.optimize());
+            }
+            Stmt::Block(stmts) => {
+                stmts.iter_mut().for_each(|stmt| stmt.optimize());
+            }
             Stmt::For {
                 init,
                 cond,
                 incr,
                 body,
-            } => {}
+            } => {
+                init.optimize();
+                cond.optimize();
+                incr.optimize();
+                body.optimize();
+            }
             Stmt::Break => {}
         }
     }
@@ -621,16 +632,18 @@ impl fmt::Display for Stmt {
                 incr,
                 body,
             } => {
-                if let Stmt::Block(stmts) = &**incr {
-                    write!(f, "for ({init} {cond} ")?;
-                    let (last, others) = stmts.split_last().unwrap();
-                    for inc in others {
-                        write!(f, "{inc}, ")?;
-                    }
-                    write!(f, "{last}) {body}")
+                let incr = if let Stmt::Block(incrs) = &**incr {
+                    incrs
+                        .iter()
+                        .map(|inc| inc.to_string())
+                        .map(|inc| inc.trim_end_matches(";").to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 } else {
-                    write!(f, "for ({init} {cond} {incr}) {body}")
-                }
+                    incr.to_string().trim_end_matches(";").to_owned()
+                };
+
+                write!(f, "for ({init} {cond}; {incr}) {body}")
             }
             Stmt::Break => write!(f, "break;"),
         }
