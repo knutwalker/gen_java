@@ -141,6 +141,7 @@ pub enum BinOp {
     Mul,
     Shl,
     Shr,
+    Eq,
     Gt,
     Lt,
     Gte,
@@ -340,7 +341,7 @@ impl Expr {
                         }
                         _ => {}
                     },
-                    BinOp::Index | BinOp::Gt | BinOp::Lt | BinOp::Gte | BinOp::Lte => {}
+                    BinOp::Index | BinOp::Eq | BinOp::Gt | BinOp::Lt | BinOp::Gte | BinOp::Lte => {}
                 }
                 if let Expr::Binary { op: lhs_op, .. } = &**lhs {
                     if lhs_op > op {
@@ -724,6 +725,7 @@ impl BinOp {
             Self::And => Sigil::Between("&"),
             Self::Or => Sigil::Between("|"),
             Self::Gt => Sigil::Between(">"),
+            Self::Eq => Sigil::Between("=="),
             Self::Lt => Sigil::Between("<"),
             Self::Gte => Sigil::Between(">="),
             Self::Lte => Sigil::Between("<="),
