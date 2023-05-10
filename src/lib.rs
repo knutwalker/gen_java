@@ -97,6 +97,19 @@ pub enum Stmt {
     },
     Expr(Expr),
     Comment(String),
+    If {
+        cond: Expr,
+        then: Box<Stmt>,
+        ells: Option<Box<Stmt>>,
+    },
+    Block(Vec<Stmt>),
+    For {
+        init: Box<Stmt>,
+        cond: Box<Expr>,
+        incr: Box<Stmt>,
+        body: Box<Stmt>,
+    },
+    Break,
 }
 
 #[derive(Debug, Clone)]
@@ -125,8 +138,12 @@ pub enum BinOp {
     Index,
     Add,
     Sub,
+    Mul,
     Shl,
     Shr,
+    Gt,
+    Lt,
+    Gte,
     Lte,
     And,
     Or,
@@ -247,6 +264,7 @@ impl Expr {
                         }
                         _ => {}
                     },
+                    BinOp::Mul => {} // TODO
                     BinOp::Shl => match (&mut **lhs, &mut **rhs) {
                         (Expr::Literal(lhs), Expr::Literal(rhs)) => {
                             *self = Expr::Literal(lhs.wrapping_shl(*rhs));
@@ -307,7 +325,7 @@ impl Expr {
                         }
                         _ => {}
                     },
-                    BinOp::Index | BinOp::Lte => {}
+                    BinOp::Index | BinOp::Gt | BinOp::Lt | BinOp::Gte | BinOp::Lte => {}
                 }
                 if let Expr::Binary { op: lhs_op, .. } = &**lhs {
                     if lhs_op > op {
@@ -393,6 +411,15 @@ impl Stmt {
                 expr.optimize();
             }
             Stmt::Comment(_) => {}
+            Stmt::If { cond, then, ells } => {}
+            Stmt::Block(_) => {}
+            Stmt::For {
+                init,
+                cond,
+                incr,
+                body,
+            } => {}
+            Stmt::Break => {}
         }
     }
 }
@@ -571,6 +598,41 @@ impl fmt::Display for Stmt {
             }
             Self::Expr(e) => write!(f, "{e};"),
             Self::Comment(comment) => write!(f, "// {}", comment),
+            Stmt::If {
+                cond,
+                then,
+                ells: Some(ells),
+            } => write!(f, "if ({cond}) {then} else {ells}"),
+            Stmt::If {
+                cond,
+                then,
+                ells: None,
+            } => write!(f, "if ({cond}) {then}"),
+            Stmt::Block(stmts) => {
+                writeln!(f, "{{")?;
+                for stmt in stmts {
+                    writeln!(f, "    {stmt}")?;
+                }
+                write!(f, "}}")
+            }
+            Stmt::For {
+                init,
+                cond,
+                incr,
+                body,
+            } => {
+                if let Stmt::Block(stmts) = &**incr {
+                    write!(f, "for ({init} {cond} ")?;
+                    let (last, others) = stmts.split_last().unwrap();
+                    for inc in others {
+                        write!(f, "{inc}, ")?;
+                    }
+                    write!(f, "{last}) {body}")
+                } else {
+                    write!(f, "for ({init} {cond} {incr}) {body}")
+                }
+            }
+            Stmt::Break => write!(f, "break;"),
         }
     }
 }
@@ -630,10 +692,14 @@ impl BinOp {
         match self {
             Self::Add => Sigil::Between("+"),
             Self::Sub => Sigil::Between("-"),
+            Self::Mul => Sigil::Between("*"),
             Self::Shl => Sigil::Between("<<"),
             Self::Shr => Sigil::Between(">>>"),
             Self::And => Sigil::Between("&"),
             Self::Or => Sigil::Between("|"),
+            Self::Gt => Sigil::Between(">"),
+            Self::Lt => Sigil::Between("<"),
+            Self::Gte => Sigil::Between(">="),
             Self::Lte => Sigil::Between("<="),
             Self::Index => Sigil::Around("[", "]"),
         }
