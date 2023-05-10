@@ -462,11 +462,9 @@ impl MethodDef {
         match self.code {
             Some(code) => {
                 fmtln!(wrt, " {{");
-                wrt.indent();
                 for stmt in code {
                     fmtln!(wrt, "{stmt}");
                 }
-                wrt.outdent();
                 fmtln!(wrt, "{CLOSE}");
             }
             None => {
@@ -508,7 +506,6 @@ impl ClassDef {
             }
         }
         fmtln!(wrt, "{} {} {} {{", self.modifiers, self.typ, self.name);
-        wrt.indent();
 
         for member in self.members {
             wrt.nl();
@@ -519,7 +516,6 @@ impl ClassDef {
             }
         }
 
-        wrt.outdent();
         fmtln!(wrt, "{CLOSE}");
     }
 }
@@ -622,7 +618,7 @@ impl fmt::Display for Stmt {
             Stmt::Block(stmts) => {
                 writeln!(f, "{{")?;
                 for stmt in stmts {
-                    writeln!(f, "    {stmt}")?;
+                    writeln!(f, "{stmt}")?;
                 }
                 write!(f, "}}")
             }
@@ -663,7 +659,7 @@ impl fmt::Display for Expr {
             Self::ArrayInit(exprs) => {
                 writeln!(f, "{{")?;
                 for expr in exprs {
-                    writeln!(f, "    {expr},")?;
+                    writeln!(f, "{expr},")?;
                 }
                 write!(f, "}}")
             }
@@ -739,11 +735,11 @@ impl FileWriter {
         self.file.push('\n');
     }
 
-    pub fn indent(&mut self) {
+    fn indent(&mut self) {
         self.indent += 4;
     }
 
-    pub fn outdent(&mut self) {
+    fn outdent(&mut self) {
         self.indent -= 4;
     }
 
@@ -763,9 +759,20 @@ impl FileWriter {
         if s.is_empty() {
             return;
         }
+
+        let trim_line = s.trim();
+        if trim_line.starts_with('}') {
+            self.outdent();
+        }
+
         if self.line.is_empty() {
             self.line.push_str(&INDENT.repeat(self.indent));
         }
+
+        if trim_line.ends_with('{') {
+            self.indent();
+        }
+
         self.line.push_str(s);
     }
 
