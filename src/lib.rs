@@ -264,7 +264,22 @@ impl Expr {
                         }
                         _ => {}
                     },
-                    BinOp::Mul => {} // TODO
+                    BinOp::Mul => match (&mut **lhs, &mut **rhs) {
+                        (Expr::Literal(lhs), Expr::Literal(rhs)) => {
+                            *self = Expr::Literal(lhs.wrapping_mul(*rhs));
+                            return;
+                        }
+                        (Expr::Literal(0), _) | (_, Expr::Literal(0)) => {
+                            *self = Expr::Literal(0);
+                            return;
+                        }
+                        (Expr::Literal(1), rest) | (rest, Expr::Literal(1)) => {
+                            let rest = rest.take();
+                            *self = rest;
+                            return;
+                        }
+                        _ => {}
+                    },
                     BinOp::Shl => match (&mut **lhs, &mut **rhs) {
                         (Expr::Literal(lhs), Expr::Literal(rhs)) => {
                             *self = Expr::Literal(lhs.wrapping_shl(*rhs));
@@ -414,7 +429,9 @@ impl Stmt {
             Stmt::If { cond, then, ells } => {
                 cond.optimize();
                 then.optimize();
-                ells.as_mut().map(|e| e.optimize());
+                if let Some(e) = ells {
+                    e.optimize()
+                }
             }
             Stmt::Block(stmts) => {
                 stmts.iter_mut().for_each(|stmt| stmt.optimize());
@@ -632,11 +649,11 @@ impl fmt::Display for Stmt {
                     incrs
                         .iter()
                         .map(|inc| inc.to_string())
-                        .map(|inc| inc.trim_end_matches(";").to_string())
+                        .map(|inc| inc.trim_end_matches(';').to_string())
                         .collect::<Vec<_>>()
                         .join(", ")
                 } else {
-                    incr.to_string().trim_end_matches(";").to_owned()
+                    incr.to_string().trim_end_matches(';').to_owned()
                 };
 
                 write!(f, "for ({init} {cond}; {incr}) {body}")
