@@ -82,6 +82,7 @@ pub struct Arg {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Stmt {
+    NoOp,
     Def(Def),
     Assign {
         lhs: Expr,
@@ -430,8 +431,26 @@ impl Stmt {
             Stmt::If { cond, then, ells } => {
                 cond.optimize();
                 then.optimize();
+
+                match &mut **then {
+                    Stmt::Block(_) => {}
+                    inner => {
+                        let inner = inner.take();
+                        *then = Box::new(Stmt::Block(vec![inner]));
+                    }
+                }
+
                 if let Some(e) = ells {
-                    e.optimize()
+                    e.optimize();
+
+                    match &mut **e {
+                        Stmt::Block(_) => {}
+                        Stmt::If { .. } => {}
+                        inner => {
+                            let inner = inner.take();
+                            *e = Box::new(Stmt::Block(vec![inner]));
+                        }
+                    }
                 }
             }
             Stmt::Block(stmts) => {
@@ -448,8 +467,12 @@ impl Stmt {
                 incr.optimize();
                 body.optimize();
             }
-            Stmt::Break => {}
+            Stmt::Break | Stmt::NoOp => {}
         }
+    }
+
+    fn take(&mut self) -> Self {
+        std::mem::replace(self, Self::NoOp)
     }
 }
 
@@ -596,6 +619,7 @@ impl fmt::Display for Arg {
 impl fmt::Display for Stmt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NoOp => Ok(()),
             Self::Def(Def {
                 typ,
                 ident,
